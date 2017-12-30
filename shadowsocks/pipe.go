@@ -3,8 +3,10 @@ package shadowsocks
 import (
 	"bytes"
 	"encoding/binary"
+        "glog"
 	"io"
 	"net"
+        "strings"
 	"time"
 )
 
@@ -16,7 +18,15 @@ func SetReadTimeout(c net.Conn) {
 
 // PipeThenClose copies data from src to dst, closes dst when done.
 func PipeThenClose(src, dst net.Conn) {
-	defer dst.Close()
+        var port1a string = strings.Split(src.RemoteAddr().String(),":")[1]
+        var port1b string = strings.Split(src.LocalAddr().String(),":")[1]
+        var port2a string = strings.Split(dst.RemoteAddr().String(),":")[1]
+        var port2b string = strings.Split(dst.LocalAddr().String(),":")[1]
+        glog.V(2).Infof("pipe(%s->%s)<->(%s->%s):begin to pipe src->dst,then close dst...",port1a,port1b, port2a,port2b)
+	defer func() {
+            dst.Close()
+            glog.V(3).Infof("pipe(%s->%s)<->(%s->%s):closed dst.",port1a,port1b,port2a,port2b)
+        }()
 	buf := leakyBuf.Get()
 	defer leakyBuf.Put(buf)
 	for {
@@ -27,7 +37,8 @@ func PipeThenClose(src, dst net.Conn) {
 		if n > 0 {
 			// Note: avoid overwrite err returned by Read.
 			if _, err := dst.Write(buf[0:n]); err != nil {
-				Debug.Println("write:", err)
+				glog.Errorf("pipe(%s->%s)<->(%s->%s):write:%s",port1a,port1b,port2a,port2b,err)
+                                //Debug.Println("write:", err)
 				break
 			}
 		}
