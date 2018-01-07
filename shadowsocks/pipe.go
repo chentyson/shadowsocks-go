@@ -3,7 +3,7 @@ package shadowsocks
 import (
 	"bytes"
 	"encoding/binary"
-        "glog"
+        "github.com/glog"
 	"io"
 	"net"
         "strings"

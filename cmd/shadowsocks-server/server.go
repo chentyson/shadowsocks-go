@@ -7,7 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"glog"
+	"github.com/glog"
 	"net"
 	"os"
 	"os/signal"
