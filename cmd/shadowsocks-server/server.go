@@ -2,12 +2,13 @@ package main
 
 import (
 	"bytes"
+	//"context"
 	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"github.com/glog"
+	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -16,7 +17,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-        "time"
+	"time"
 
 	ss "github.com/shadowsocks/shadowsocks-go/shadowsocks"
 )
@@ -65,7 +66,7 @@ func getRequest(conn *ss.Conn, auth bool) (host string, ota bool, err error) {
 		}
 		reqStart, reqEnd = idDm0, idDm0+int(buf[idDmLen])+lenDmBase
 	default:
-		err = fmt.Errorf("addr type %d(%d/%d) not supported", addrType&ss.AddrMask,addrType,ss.AddrMask)
+		err = fmt.Errorf("addr type %d(%d/%d) not supported", addrType&ss.AddrMask, addrType, ss.AddrMask)
 		return
 	}
 
@@ -109,33 +110,51 @@ const logCntDelta = 100
 var connCnt int
 var nextLogConnCnt int = logCntDelta
 
-func handleConnection(conn *ss.Conn, auth bool) {
+//func DialCustom(network, address string, timeout time.Duration, localIP []byte, localPort int) (net.Conn, error) {
+func DialCustom(network, address string, timeout time.Duration, localIP string, localPort string) (net.Conn, error) {
+	//netAddr := &net.TCPAddr{Port: localPort}
+
+	//if len(localIP) != 0 {
+	//	netAddr.IP = localIP
+	//}
+	netAddr, _ := net.ResolveTCPAddr("tcp", localIP+":"+localPort)
+
+	glog.V(3).Infof("------use local ip %s and local port %s,net the netAddr:", localIP, localPort, netAddr)
+
+	d := net.Dialer{Timeout: timeout, LocalAddr: netAddr}
+	return d.Dial(network, address)
+}
+
+func handleConnection(conn *ss.Conn, ip string, auth bool) {
 	var host string
-        var porta string = strings.Split(conn.LocalAddr().String(),":")[1]
-        var portb string = strings.Split(conn.RemoteAddr().String(),":")[1]
+	var porta string = strings.Split(conn.LocalAddr().String(), ":")[1]
+	var portb string = strings.Split(conn.RemoteAddr().String(), ":")[1]
+	//ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	//defer cancel()
+
 	connCnt++ // this maybe not accurate, but should be enough
-        glog.V(2).Infof("handleconn(%s-%s)->Start to handle new conn of %d conns total...",portb,porta,connCnt)
+	glog.V(2).Infof("handleconn(%s-%s)->Start to handle new conn of %d conns total...", portb, porta, connCnt)
 	if connCnt-nextLogConnCnt >= 0 {
 		// XXX There's no xadd in the atomic package, so it's difficult to log
 		// the message only once with low cost. Also note nextLogConnCnt maybe
 		// added twice for current peak connection number level.
-		glog.Info("handleconn(%s-%s)->Number of client connections reaches %d\n", portb,porta,nextLogConnCnt)
+		glog.Info("handleconn(%s-%s)->Number of client connections reaches %d\n", portb, porta, nextLogConnCnt)
 		nextLogConnCnt += logCntDelta
 	}
 
 	// function arguments are always evaluated, so surround debug statement
 	// with if statement
 	if debug {
-		glog.V(3).Infof("handleconn(%s-%s)->new client %s->%s\n", portb,porta,conn.RemoteAddr().String(), conn.LocalAddr())
+		glog.V(3).Infof("handleconn(%s-%s)->new client %s->%s\n", portb, porta, conn.RemoteAddr().String(), conn.LocalAddr())
 	}
 	closed := false
 	defer func() {
 		connCnt--
 		if debug {
-			glog.V(3).Infof("handleconn(%s-%s)->closed pipe %s<->%s (%d conns left)", portb,porta,conn.RemoteAddr(), host, connCnt)
+			glog.V(3).Infof("handleconn(%s-%s)->closed pipe %s<->%s (%d conns left)", portb, porta, conn.RemoteAddr(), host, connCnt)
 		}
 		if !closed {
-                        glog.Infof("handleconn(%s-%s)->Closing conn %s<->%s\n", portb,porta,conn.RemoteAddr(), conn.LocalAddr())
+			glog.Infof("handleconn(%s-%s)->Closing conn %s<->%s\n", portb, porta, conn.RemoteAddr(), conn.LocalAddr())
 
 			conn.Close()
 		}
@@ -143,49 +162,63 @@ func handleConnection(conn *ss.Conn, auth bool) {
 
 	host, ota, err := getRequest(conn, auth)
 	if err != nil {
-		glog.Errorf("handleconn(%s-%s)->error getting request", portb,porta,conn.RemoteAddr(), conn.LocalAddr(), err)
+		glog.Errorf("handleconn(%s-%s)->error getting request", portb, porta, conn.RemoteAddr(), conn.LocalAddr(), err)
 		//closed = true
 		return
 	}
 	// ensure the host does not contain some illegal characters, NUL may panic on Win32
 	if strings.ContainsRune(host, 0x00) {
-                glog.Errorf("handleconn(%s-%s)->invalid domain name.",portb,porta)
+		glog.Errorf("handleconn(%s-%s)->invalid domain name.", portb, porta)
 		//closed = true
 		return
 	}
-	glog.V(3).Infof("handleconn(%s-%s)->connecting", portb,porta,host)
-	remote, err := net.DialTimeout("tcp", host, 2*time.Second)
+	glog.V(3).Infof("handleconn(%s-%s)->connecting %s", portb, porta, host)
+	//sd := &net.sysDialer{network: network, address: raddr.String()}
+	//laddr, err := net.ResolveTCPAddr("tcp", "192.158.229.9:")
+	//raddr, err := net.ResolveTCPAddr("tcp", host)
+	//remote, err := sd.dialTCP(ctx, laddr, raddr) //"tcp", laddr, raddr)
+	//d := net.Dialer{ Timeout: 2*time.Second, localAddr: pl
+	//remote, err := net.DialTimeout("tcp", host, 2*time.Second)
+	//if laddr != nil {
+	//	glog.Infof("--------Local(%s) dial to remote(%s)", laddr.String(), raddr.String())
+	//}
+	//remote, err := net.DialTCP("tcp", laddr, raddr)
+	//localIP := []byte{0xC0, 0x9E, 0xE5, 0x9} // 指定IP
+	//localIP := []byte{} //  any IP，不指定IP
+	localPort := "0" //9001   // 指定端口
+	remote, err := DialCustom("tcp", host, time.Second*3, ip, localPort)
 	if err != nil {
 		if ne, ok := err.(*net.OpError); ok && (ne.Err == syscall.EMFILE || ne.Err == syscall.ENFILE) {
 			// log too many open file error
 			// EMFILE is process reaches open file limits, ENFILE is system limit
-			glog.Errorf("handleconn(%s-%s)->dial error:", portb,porta,err)
+			glog.Errorf("handleconn(%s-%s)->dial error:", portb, porta, err)
 		} else {
-			glog.Errorf("handleconn(%s-%s)->error connecting to:", portb,porta, host, err)
+			glog.Errorf("handleconn(%s-%s)->error connecting to:", portb, porta, host, err)
 		}
 		return
 	}
+	glog.V(3).Infof("Connect build from local %s --> reomote %s ...", remote.LocalAddr().String(), remote.RemoteAddr().String())
 	defer func() {
 		if !closed {
-                        glog.V(3).Infof("handleconn(%s-%s)->Closing remote conn %s<->%s\n", portb,porta,conn.LocalAddr(), host)
+			glog.V(3).Infof("handleconn(%s-%s)->Closing remote conn %s<->%s\n", portb, porta, conn.LocalAddr(), host)
 			remote.Close()
 		}
 	}()
 	if debug {
-		glog.V(3).Infof("handleconn(%s-%s)->piping %s<->%s ota=%v connOta=%v", portb,porta,conn.RemoteAddr(), host, ota, conn.IsOta())
+		glog.V(3).Infof("handleconn(%s-%s)->piping %s<->%s ota=%v connOta=%v", portb, porta, conn.RemoteAddr(), host, ota, conn.IsOta())
 	}
 	if ota {
 		go ss.PipeThenCloseOta(conn, remote)
 	} else {
 		go ss.PipeThenClose(conn, remote)
 	}
-        if debug {
-            glog.V(3).Infof("handleconn(%s-%s)->go piped %s-->%s:",portb,porta,conn.RemoteAddr(),host)
-        }
+	if debug {
+		glog.V(3).Infof("handleconn(%s-%s)->go piped %s-->%s:", portb, porta, conn.RemoteAddr(), host)
+	}
 	ss.PipeThenClose(remote, conn)
-        if debug {
-            glog.V(3).Infof("handleconn(%s-%s)->pipe closed %s-->%s", portb,porta,host, conn.RemoteAddr())
-        }
+	if debug {
+		glog.V(3).Infof("handleconn(%s-%s)->pipe closed %s-->%s", portb, porta, host, conn.RemoteAddr())
+	}
 	closed = true
 	return
 }
@@ -193,7 +226,7 @@ func handleConnection(conn *ss.Conn, auth bool) {
 type PortListener struct {
 	password string
 	listener net.Listener
-        //lnFile *os.File
+	//lnFile *os.File
 }
 
 type UDPListener struct {
@@ -246,7 +279,7 @@ func (pm *PasswdManager) del(port string) {
 		upl.listener.Close()
 	}
 	pl.listener.Close()
-        //pl.lnFile.Close()
+	//pl.lnFile.Close()
 	pm.Lock()
 	delete(pm.portListener, port)
 	if udp {
@@ -259,7 +292,7 @@ func (pm *PasswdManager) del(port string) {
 // port. A different approach would be directly change the password used by
 // that port, but that requires **sharing** password between the port listener
 // and password manager.
-func (pm *PasswdManager) updatePortPasswd(port, password string, auth bool) {
+func (pm *PasswdManager) updatePortPasswd(port, password, ip string, auth bool) {
 	pl, ok := pm.get(port)
 	if !ok {
 		glog.Infof("new port %s added\n", port)
@@ -270,13 +303,13 @@ func (pm *PasswdManager) updatePortPasswd(port, password string, auth bool) {
 		glog.Infof("closing port %s to update password\n", port)
 		pl.listener.Close()
 		//log.Printf("closing file of port %s to update password\n", port)
-                //pl.lnFile.Close()
+		//pl.lnFile.Close()
 		//log.Printf("sleeping 100 millisecend ...\n", port)
-                time.Sleep(100 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 	// run will add the new port listener to passwdManager.
 	// So there maybe concurrent access to passwdManager and we need lock to protect it.
-	go run(port, password, auth)
+	go run(port, password, ip, auth)
 	if udp {
 		pl, _ := pm.getUDP(port)
 		pl.listener.Close()
@@ -300,9 +333,11 @@ func updatePasswd() {
 		return
 	}
 	for port, passwd := range config.PortPassword {
-		passwdManager.updatePortPasswd(port, passwd, config.Auth)
+		ip := config.PortIp[port]
+		passwdManager.updatePortPasswd(port, passwd, ip, config.Auth)
+		// delete ports exists in new conifg,left is the ports deleted by new configfile
 		if oldconfig.PortPassword != nil {
-                        glog.Infof("deleting port %s...\n", port)
+			//                glog.Infof("deleting port %s...\n", port)
 			delete(oldconfig.PortPassword, port)
 		}
 	}
@@ -320,10 +355,10 @@ func waitSignal() {
 	for sig := range sigChan {
 		if sig == syscall.SIGHUP {
 			updatePasswd()
-                } else if (sig == os.Interrupt || sig == os.Kill) {
-                        glog.Flush()
-                        os.Exit(0)
-                } else {
+		} else if sig == os.Interrupt || sig == os.Kill {
+			glog.Flush()
+			os.Exit(0)
+		} else {
 			// is this going to happen?
 			glog.Infof("caught signal %s, exit", sig)
 			os.Exit(0)
@@ -331,26 +366,26 @@ func waitSignal() {
 	}
 }
 
-func run(port, password string, auth bool) {
+func run(port, password, ip string, auth bool) {
 	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		glog.Errorf("error listening port %d: %s\n", port, err)
 		os.Exit(1)
 	}
-        //lnFile, err := ln.(*net.TCPListener).File()
+	//lnFile, err := ln.(*net.TCPListener).File()
 	//if err != nil {
 	//	log.Printf("error get listener files port %v: %v\n", port, err)
-//	}
+	//	}
 	passwdManager.add(port, password, ln)
 	var cipher *ss.Cipher
-	glog.Infof("server listening port %s...\n", port)
+	glog.Infof("server listening port %s with ip: %s...\n", port, ip)
 	for {
 		conn, err := ln.Accept()
-                if err != nil {
-                       glog.Errorf("run(%s)->%s",port,err)
-                       return
-                }
-                glog.V(2).Infof("New connection accepted..%s",conn.RemoteAddr())
+		if err != nil {
+			glog.Errorf("Connection accept error:run(%s)->%s", port, err)
+			return
+		}
+		glog.V(2).Infof("New connection accepted..%s", conn.RemoteAddr())
 		if err != nil {
 			// listener maybe closed to update password
 			glog.Errorf("accept error: %s\n", err)
@@ -366,7 +401,7 @@ func run(port, password string, auth bool) {
 				continue
 			}
 		}
-		go handleConnection(ss.NewConn(conn, cipher.Copy()), auth)
+		go handleConnection(ss.NewConn(conn, cipher.Copy()), ip, auth)
 	}
 }
 
@@ -436,8 +471,8 @@ func main() {
 	flag.IntVar(&core, "core", 0, "maximum number of CPU cores to use, default is determinied by Go runtime")
 	flag.BoolVar((*bool)(&debug), "d", false, "print debug message")
 	flag.BoolVar(&udp, "u", false, "UDP Relay")
-        flag.Set("log_dir","/tmp")
-        flag.Set("alsologtostderr","true")
+	flag.Set("log_dir", "/tmp")
+	flag.Set("alsologtostderr", "true")
 	flag.Parse()
 
 	if printVer {
@@ -454,6 +489,7 @@ func main() {
 
 	var err error
 	config, err = ss.ParseConfig(configFile)
+	glog.Infof("Load config file from:%s", configFile)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "error reading %s: %s\n", configFile, err)
@@ -478,7 +514,9 @@ func main() {
 		runtime.GOMAXPROCS(core)
 	}
 	for port, password := range config.PortPassword {
-		go run(port, password, config.Auth)
+		ip := config.PortIp[port]
+		//glog.Infof(portip)
+		go run(port, password, ip, config.Auth)
 		if udp {
 			go runUDP(port, password, config.Auth)
 		}
